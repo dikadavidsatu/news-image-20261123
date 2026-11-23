@@ -4,7 +4,9 @@
 [![rank](https://make.fun/badge/news-image-20261123/dikadavidsatu/news-image-20261123/rank.svg)](https://make.fun/bounty/news-image-20261123/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261123)
 [![reward](https://make.fun/badge/news-image-20261123/dikadavidsatu/news-image-20261123/reward.svg)](https://make.fun/bounty/news-image-20261123?utm_source=github&utm_medium=readme&utm_campaign=news-image-20261123)
 
-**One Image: Monday 23 November 2026.** A single 1024×1024 PNG that sums up the day's world news as a newspaper front page: COP31 collapsing in Antalya as the lead, fourteen missing after a Russian drone strike near Kyiv beneath it, six sections (World · US & Politics · Business & Tech · Asia & Diplomacy · Sport · Culture & Odds), a dateline rail, the day in numbers, and eight world briefs — 28 stories in one image, drawn from live wire reports filed 23 November 2026 (AP, Reuters, AFP, BBC, BusinessWorld, Business Day, The Guardian, Al Jazeera and more). `headlines.json` holds the stories, `render.py` draws the page deterministically, `image_manifest.json` records the artifact's hash, and `main.ts` verifies the PNG against both.
+**Monday 23 November 2026, in one picture.** This repository holds a program that draws a single 1024×1024 newspaper front page summing up the day's world news: the COP31 climate talks collapsing in Antalya leads the page, fourteen missing after a Russian drone strike near Kyiv runs beneath it, and six sections — World, US & Politics, Business & Tech, Asia & Diplomacy, Sport, Culture & Odds — plus a dateline rail, a numbers ticker and eight world briefs carry 28 real stories from wire reports filed on 23 November 2026 (AP, Reuters, AFP, BBC, BusinessWorld, Business Day, The Guardian, Al Jazeera and more).
+
+`headlines.json` is the day's stories. `render.py` paints the page from them, deterministically — run it twice and the PNG bytes are identical. `main.ts` checks the PNG (whole file, valid chunks, 1024×1024, in the byte band) and delivers it to the grader.
 
 ## Run it
 

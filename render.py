@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Draw entry.png: Monday 23 November 2026's world news as one front page.
+"""Monday 23 November 2026, summed up in one image.
 
-Reads headlines.json (stories gathered this morning from live wire
-reports) and paints a dense 1024x1024 broadsheet with PIL. Also writes
-image_manifest.json recording exactly what was drawn, so main.ts can
-verify the artifact against its data.
-
-Deterministic: the grain uses a fixed seed, there is no clock, no
-network and no unseeded randomness, so re-running this file reproduces
-the same PNG byte for byte.
+This script turns headlines.json into entry.png, a 1024x1024 broadsheet
+front page. The stories, the geometry and the grain seed are all fixed
+at authoring time, so running the script twice produces the same PNG
+bytes twice. There is no network, no clock and no unseeded randomness
+anywhere in this file.
 """
 
 import hashlib
@@ -19,315 +16,345 @@ import os
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-W = H = 1024
-M = 32                      # page margin
-CW = W - 2 * M              # content width
+ROOT = os.path.dirname(os.path.abspath(__file__))
+SIDE = 1024
+EDGE = 32
+INNER = SIDE - 2 * EDGE
 
-PAPER = (248, 243, 232)
-CARD = (255, 253, 246)
-INK = (22, 21, 18)
-BODY = (56, 53, 47)
-GREY = (102, 98, 88)
-RULE = (206, 198, 180)
-RED = (178, 34, 34)
-RED_DK = (140, 24, 24)
-NAVY = (24, 42, 68)
-NAVY_LT = (38, 66, 100)
-GOLD = (214, 158, 46)
-TEAL = (16, 92, 96)
+PAL = {
+    "paper": (248, 243, 232),
+    "ink": (22, 21, 18),
+    "body": (56, 53, 47),
+    "grey": (102, 98, 88),
+    "rule": (206, 198, 180),
+    "red": (178, 34, 34),
+    "navy": (24, 42, 68),
+    "navy2": (38, 66, 100),
+    "gold": (214, 158, 46),
+}
 
-FONT_DIRS = ["/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/truetype/noto"]
+LOOK = ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/truetype/noto")
 
 
-def font(names, size):
+def typeface(names, size):
     for name in names:
-        for d in FONT_DIRS:
-            p = os.path.join(d, name)
-            if os.path.exists(p):
-                return ImageFont.truetype(p, size)
+        for folder in LOOK:
+            path = os.path.join(folder, name)
+            if os.path.exists(path):
+                return ImageFont.truetype(path, size)
     return ImageFont.load_default()
 
 
-def f_title(s):
-    return font(["DejaVuSerif-Bold.ttf"], s)
+def title_face(size):
+    return typeface(["DejaVuSerif-Bold.ttf"], size)
 
 
-def f_serif(s):
-    return font(["DejaVuSerif-Bold.ttf"], s)
+def serif_face(size):
+    return typeface(["DejaVuSerif-Bold.ttf"], size)
 
 
-def f_sans(s):
-    return font(["DejaVuSans.ttf"], s)
+def plain_face(size):
+    return typeface(["DejaVuSans.ttf"], size)
 
 
-def f_bold(s):
-    return font(["DejaVuSans-Bold.ttf"], s)
+def bold_face(size):
+    return typeface(["DejaVuSans-Bold.ttf"], size)
 
 
-def f_ital(s):
-    return font(["DejaVuSans-Oblique.ttf", "DejaVuSans.ttf"], s)
+def italic_face(size):
+    return typeface(["DejaVuSans-Oblique.ttf", "DejaVuSans.ttf"], size)
 
 
-def wrap(draw, text, fnt, width):
-    lines, cur = [], ""
+def flow(canvas, text, face, width):
+    """Greedy word wrap: lines of `text` that fit `width` in `face`."""
+    out, current = [], ""
     for word in text.split():
-        trial = (cur + " " + word).strip()
-        if draw.textlength(trial, font=fnt) <= width or not cur:
-            cur = trial
+        trial = (current + " " + word).strip()
+        if canvas.textlength(trial, font=face) <= width or not current:
+            current = trial
         else:
-            lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
+            out.append(current)
+            current = word
+    if current:
+        out.append(current)
+    return out
 
 
-def tracked(text):
+def letterspaced(text):
     return " ".join(list(text))
 
 
-def grain(img, seed=20261123, amp=7, block=3):
-    """Blocky newsprint grain. Per-pixel noise would bloat the PNG past
-    the 1 MiB cap; 3x3 blocks keep the file in the few-hundred-KB band
-    while the page still reads as paper."""
+def paper_grain(picture, seed=20261123, strength=7, cell=3):
+    """Newsprint grain in coarse blocks. Fine per-pixel noise would push
+    the PNG past the 1 MiB cap; 3x3 blocks keep the file in the
+    few-hundred-KB band while the page still reads as paper."""
     rng = np.random.default_rng(seed)
-    small = rng.integers(-amp, amp + 1, (H // block + 1, W // block + 1, 1))
-    noise = np.repeat(np.repeat(small, block, axis=0), block, axis=1)[:H, :W]
-    arr = np.asarray(img).astype(np.int16)
-    return Image.fromarray(np.clip(arr + noise, 0, 255).astype(np.uint8))
+    tiny = rng.integers(-strength, strength + 1, (SIDE // cell + 1, SIDE // cell + 1, 1))
+    field = np.repeat(np.repeat(tiny, cell, axis=0), cell, axis=1)[:SIDE, :SIDE]
+    pixels = np.asarray(picture).astype(np.int16)
+    return Image.fromarray(np.clip(pixels + field, 0, 255).astype(np.uint8))
 
 
-def dots(draw, x0, y0, x1, y1, color, gap=11, r0=1.0, r1=4.2):
-    """Halftone dots that swell left to right, for the illustration panel."""
+def dot_field(canvas, left, top, right, bottom, colour, step=11):
+    """Halftone dots that grow from left to right."""
     row = 0
-    y = y0 + gap // 2
-    while y < y1:
-        x = x0 + gap // 2
-        while x < x1:
-            t = (x - x0) / max(1, x1 - x0)
-            r = r0 + t * r1 * (0.8 + 0.2 * ((row % 3) / 2))
-            draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
-            x += gap
-        y += gap
+    y = top + step // 2
+    while y < bottom:
+        x = left + step // 2
+        while x < right:
+            frac = (x - left) / max(1, right - left)
+            rad = 1.0 + frac * 4.2 * (0.8 + 0.2 * ((row % 3) / 2))
+            canvas.ellipse([x - rad, y - rad, x + rad, y + rad], fill=colour)
+            x += step
+        y += step
         row += 1
 
 
-def draw_globe(draw, cx, cy, r):
-    """A cracked-earth globe: navy disc, gold meridians, a red fissure."""
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=NAVY)
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=GOLD, width=3)
-    for k in range(-2, 3):
-        off = k * r / 3.0
-        h = math.sqrt(max(0.0, r * r - off * off))
-        draw.arc([cx - r + abs(off) * 0.55, cy - h, cx + r - abs(off) * 0.55, cy + h],
-                 270, 90, fill=GOLD, width=2)
-        draw.arc([cx - r + abs(off) * 0.55, cy - h, cx + r - abs(off) * 0.55, cy + h],
-                 90, 270, fill=GOLD, width=2)
-    draw.line([cx - r, cy, cx + r, cy], fill=GOLD, width=2)
-    # the crack: a jagged red line across the disc
-    pts = [(cx - r * 0.85, cy - r * 0.28), (cx - r * 0.4, cy - r * 0.05),
-           (cx - r * 0.1, cy + r * 0.22), (cx + r * 0.25, cy + r * 0.02),
-           (cx + r * 0.6, cy + r * 0.3), (cx + r * 0.85, cy + r * 0.12)]
-    draw.line(pts, fill=RED, width=5, joint="curve")
-    for (px, py) in pts[1:-1]:
-        draw.ellipse([px - 3, py - 3, px + 3, py + 3], fill=RED)
+def cracked_globe(canvas, cx, cy, radius):
+    """Navy disc, gold ring and chords, split by a red zigzag crack."""
+    canvas.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=PAL["navy"])
+    canvas.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
+                   outline=PAL["gold"], width=3)
+    for k in (-2, -1, 0, 1, 2):
+        shift = k * radius / 3.0
+        half = math.sqrt(max(0.0, radius * radius - shift * shift))
+        canvas.arc([cx - radius + abs(shift) * 0.55, cy - half,
+                    cx + radius - abs(shift) * 0.55, cy + half],
+                   270, 90, fill=PAL["gold"], width=2)
+        canvas.arc([cx - radius + abs(shift) * 0.55, cy - half,
+                    cx + radius - abs(shift) * 0.55, cy + half],
+                   90, 270, fill=PAL["gold"], width=2)
+    canvas.line([cx - radius, cy, cx + radius, cy], fill=PAL["gold"], width=2)
+    crack = [(cx - radius * 0.85, cy - radius * 0.28), (cx - radius * 0.4, cy - radius * 0.05),
+             (cx - radius * 0.1, cy + radius * 0.22), (cx + radius * 0.25, cy + radius * 0.02),
+             (cx + radius * 0.6, cy + radius * 0.3), (cx + radius * 0.85, cy + radius * 0.12)]
+    canvas.line(crack, fill=PAL["red"], width=5, joint="curve")
+    for px, py in crack[1:-1]:
+        canvas.ellipse([px - 3, py - 3, px + 3, py + 3], fill=PAL["red"])
 
 
-def headline_block(draw, x, y, width, story, hsize=13.5, dsize=11, max_h=2, max_d=2):
-    for ln in wrap(draw, story["h"], f_bold(hsize), width)[:max_h]:
-        draw.text((x, y), ln, font=f_bold(hsize), fill=INK)
-        y += hsize + 3
-    for ln in wrap(draw, story["d"], f_sans(dsize), width)[:max_d]:
-        draw.text((x, y), ln, font=f_sans(dsize), fill=BODY)
-        y += dsize + 2.5
-    draw.text((x, y), story["s"].upper(), font=f_bold(8.5), fill=GREY)
-    return y + 11
+class Sheet:
+    """The page and a moving cursor; every block draws, then advances y."""
+
+    def __init__(self):
+        self.img = Image.new("RGB", (SIDE, SIDE), PAL["paper"])
+        self.c = ImageDraw.Draw(self.img)
+        self.y = 0
+        self.shown = []
+
+    def rule(self, y=None, weight=2, colour=None):
+        yy = self.y if y is None else y
+        self.c.rectangle([EDGE, yy, SIDE - EDGE, yy + weight],
+                         fill=colour or PAL["ink"])
+
+    def masthead(self, data):
+        c = self.c
+        c.text((EDGE, 12), "ONE IMAGE · THE DAY'S NEWS, WHOLE",
+               font=bold_face(11), fill=PAL["red"])
+        name = "THE WORLD IN ONE PICTURE"
+        face = title_face(48)
+        wide = c.textlength(name, font=face)
+        c.text(((SIDE - wide) / 2, 26), name, font=face, fill=PAL["ink"])
+        self.rule(86, 4)
+        c.text((EDGE, 97), data["date_line"].upper(), font=bold_face(12), fill=PAL["ink"])
+        mid = "MONDAY EDITION · 23 NOVEMBER 2026"
+        mw = c.textlength(mid, font=bold_face(12))
+        c.text(((SIDE - mw) / 2, 97), mid, font=bold_face(12), fill=PAL["ink"])
+        right = "WIRE REPORTS · 02:00 UTC"
+        rw = c.textlength(right, font=plain_face(10.5))
+        c.text((SIDE - EDGE - rw, 98), right, font=plain_face(10.5), fill=PAL["grey"])
+        self.rule(114, 2)
+
+    def lead_block(self, lead):
+        c = self.c
+        y = 126
+        c.text((EDGE, y), letterspaced(lead["kicker"]), font=bold_face(12), fill=PAL["red"])
+        y += 21
+        face = serif_face(30)
+        for line in flow(c, lead["headline"], face, 600):
+            c.text((EDGE, y), line, font=face, fill=PAL["ink"])
+            y += 35
+        y += 3
+        body = plain_face(12.5)
+        for line in flow(c, lead["deck"], body, 600):
+            c.text((EDGE, y), line, font=body, fill=PAL["body"])
+            y += 15
+        c.text((EDGE, y + 2), lead["source"].upper(), font=bold_face(9.5), fill=PAL["grey"])
+        self.shown.append(lead["headline"])
+        return y + 17
+
+    def panel(self):
+        c = self.c
+        x0, y0, x1 = 668, 126, SIDE - EDGE
+        c.rectangle([x0, y0, x1, y0 + 23], fill=PAL["navy"])
+        c.text((x0 + 9, y0 + 5), "ANTALYA · NO DEAL", font=bold_face(11.5),
+               fill=(255, 255, 255))
+        cracked_globe(c, (x0 + x1) // 2, y0 + 82, 52)
+        cy = y0 + 148
+        for line in flow(c, "The longest climate summit on record ends with nothing signed.",
+                         italic_face(11), x1 - x0)[:2]:
+            c.text((x0, cy), line, font=italic_face(11), fill=PAL["body"])
+            cy += 14
+        dot_field(c, x0, cy + 2, x1, cy + 30, PAL["navy2"])
+        return cy + 34
+
+    def rail(self, items):
+        c = self.c
+        y = max(self._lead_bottom, self._panel_bottom) + 6
+        self.rule(y, 2)
+        y += 8
+        for row in range(4):
+            for col in range(2):
+                city, note = items[row * 2 + col]
+                bx = EDGE + col * (INNER // 2)
+                c.ellipse([bx + 2, y + 4, bx + 9, y + 11], fill=PAL["red"])
+                c.text((bx + 16, y), city, font=bold_face(11.5), fill=PAL["ink"])
+                cw = c.textlength(city, font=bold_face(11.5))
+                c.text((bx + 21 + cw, y + 1), "— " + note, font=plain_face(10.5),
+                       fill=PAL["body"])
+            y += 18
+        return y
+
+    def second_block(self, second, y):
+        c = self.c
+        self.rule(y - 8, 2)
+        c.text((EDGE, y), letterspaced(second["kicker"]), font=bold_face(11.5),
+               fill=PAL["red"])
+        y += 19
+        face = serif_face(24)
+        for line in flow(c, second["headline"], face, INNER):
+            c.text((EDGE, y), line, font=face, fill=PAL["ink"])
+            y += 30
+        body = plain_face(12.5)
+        for line in flow(c, second["deck"], body, INNER)[:2]:
+            c.text((EDGE, y), line, font=body, fill=PAL["body"])
+            y += 15.5
+        c.text((EDGE, y + 1), second["source"].upper(), font=bold_face(9), fill=PAL["grey"])
+        self.shown.append(second["headline"])
+        return y + 6
+
+    def ticker(self, numbers, y):
+        c = self.c
+        self.rule(y, 2)
+        joined = "  ·  ".join("%s %s" % (a, b) for a, b in numbers)
+        text = "THE DAY IN NUMBERS — " + joined
+        y += 7
+        face = bold_face(11)
+        for line in flow(c, text, face, INNER)[:2]:
+            c.text((EDGE, y), line, font=face, fill=PAL["navy"])
+            y += 14
+        self.rule(y + 2, 2)
+        return y + 12
+
+    def headline(self, x, y, width, story):
+        c = self.c
+        face = bold_face(13.5)
+        for line in flow(c, story["h"], face, width)[:2]:
+            c.text((x, y), line, font=face, fill=PAL["ink"])
+            y += 16.5
+        body = plain_face(11)
+        for line in flow(c, story["d"], body, width)[:2]:
+            c.text((x, y), line, font=body, fill=PAL["body"])
+            y += 13.5
+        c.text((x, y), story["s"].upper(), font=bold_face(8.5), fill=PAL["grey"])
+        return y + 11
+
+    def brief_line(self, x, y, width, text):
+        c = self.c
+        face = bold_face(11.5)
+        c.text((x, y + 1), "▸", font=face, fill=PAL["red"])
+        for line in flow(c, text, face, width - 14)[:2]:
+            c.text((x + 14, y), line, font=face, fill=PAL["ink"])
+            y += 13.5
+        return y + 3
+
+    def section_card(self, x, y, width, sec):
+        c = self.c
+        c.rectangle([x, y, x + width, y + 20], fill=sec["color"])
+        c.text((x + 7, y + 3), sec["name"], font=bold_face(12), fill=(255, 255, 255))
+        y += 27
+        y = self.headline(x, y, width, sec["stories"][0])
+        for story in sec["stories"][1:3]:
+            y = self.brief_line(x, y, width, story["h"])
+        return y
+
+    def grid(self, sections, y):
+        c = self.c
+        col_w = (INNER - 28) // 3
+        order = [["WORLD", "US & POLITICS", "BUSINESS & TECH"],
+                 ["ASIA & DIPLOMACY", "SPORT", "CULTURE & ODDS"]]
+        lookup = {s["name"]: s for s in sections}
+        for row_i, row in enumerate(order):
+            ends = []
+            for col_i, name in enumerate(row):
+                x = EDGE + col_i * (col_w + 14)
+                ends.append(self.section_card(x, y, col_w, lookup[name]))
+                self.shown.extend(st["h"] for st in lookup[name]["stories"][:3])
+            y = max(ends) + (6 if row_i == 0 else 4)
+            if row_i == 0:
+                c.rectangle([EDGE, y - 8, SIDE - EDGE, y - 7], fill=PAL["rule"])
+        return y
+
+    def brief_strip(self, briefs, y):
+        c = self.c
+        c.text((EDGE, y), letterspaced("AROUND THE WORLD IN BRIEF"),
+               font=bold_face(11), fill=PAL["red"])
+        y += 16
+        bw = (INNER - 3 * 12) // 4
+        for i, (tag, text) in enumerate(briefs[:8]):
+            bx = EDGE + (i % 4) * (bw + 12)
+            by = y + (i // 4) * 24
+            c.text((bx, by), tag, font=bold_face(10), fill=PAL["navy"])
+            tw = c.textlength(tag, font=bold_face(10))
+            for j, line in enumerate(flow(c, text, plain_face(10), bw - tw - 6)):
+                c.text((bx + tw + 5, by + j * 12.5), line, font=plain_face(10),
+                       fill=PAL["body"])
+            self.shown.append("%s: %s" % (tag, text))
+        return y + 2 * 24
+
+    def footer(self, sources, y):
+        c = self.c
+        fy = max(y + 8, 962)
+        self.rule(fy, 2)
+        for j, line in enumerate(flow(c, "SOURCES: " + sources, plain_face(9.5), INNER)[:2]):
+            c.text((EDGE, fy + 7 + j * 12), line, font=plain_face(9.5), fill=PAL["grey"])
+        tail = ("One image, drawn by an AI agent from the day's wire reports · "
+                "Monday 23 November 2026 · Headlines as reported by the outlets named")
+        c.text((EDGE, fy + 33), tail, font=italic_face(9.5), fill=PAL["grey"])
+        return fy
 
 
-def short_item(draw, x, y, width, text):
-    f = f_bold(11.5)
-    draw.text((x, y + 1), "▸", font=f, fill=RED)
-    for ln in wrap(draw, text, f, width - 14)[:2]:
-        draw.text((x + 14, y), ln, font=f, fill=INK)
-        y += 13.5
-    return y + 3
-
-
-def section_block(draw, x, y, width, sec):
-    draw.rectangle([x, y, x + width, y + 20], fill=sec["color"])
-    draw.text((x + 7, y + 3), sec["name"], font=f_bold(12), fill=(255, 255, 255))
-    y += 27
-    y = headline_block(draw, x, y, width, sec["stories"][0])
-    for st in sec["stories"][1:3]:
-        y = short_item(draw, x, y, width, st["h"])
-    return y
-
-
-def main():
-    with open(os.path.join(HERE, "headlines.json")) as f:
+def build():
+    with open(os.path.join(ROOT, "headlines.json")) as f:
         data = json.load(f)
-    img = Image.new("RGB", (W, H), PAPER)
-    draw = ImageDraw.Draw(img)
-    rendered = []
+    page = Sheet()
+    page.masthead(data)
+    page._lead_bottom = page.lead_block(data["lead"])
+    page._panel_bottom = page.panel()
+    rail_items = [("ANTALYA", "Climate talks collapse"),
+                  ("KYIV", "14 missing in drone strike"),
+                  ("JAKARTA", "Factory fire, 50 missing"),
+                  ("SEOUL", "Minister quits over AI cheating"),
+                  ("WELLINGTON", "India 720 for 9, a record"),
+                  ("NEW DELHI", "Nepal PM meets Modi"),
+                  ("LISBON", "Thousands march on prices"),
+                  ("GENEVA", "UN keeps talking on lethal AI")]
+    rail_end = page.rail(rail_items)
+    after_second = page.second_block(data["second"], rail_end + 10)
+    after_ticker = page.ticker(data["numbers"], after_second + 6)
+    after_grid = page.grid(data["sections"], after_ticker + 16)
+    after_briefs = page.brief_strip(data["briefs"], after_grid + 2)
+    foot = page.footer(data["sources"], after_briefs)
 
-    # ---------------- masthead ----------------
-    draw.text((M, 12), "ONE IMAGE · THE DAY'S NEWS, WHOLE", font=f_bold(11), fill=RED)
-    title = "THE WORLD IN ONE PICTURE"
-    tf = f_title(48)
-    tw = draw.textlength(title, font=tf)
-    draw.text(((W - tw) / 2, 26), title, font=tf, fill=INK)
-    draw.rectangle([M, 86, W - M, 90], fill=INK)
-    draw.text((M, 97), data["date_line"].upper(), font=f_bold(12), fill=INK)
-    mid = "MONDAY EDITION · 23 NOVEMBER 2026"
-    mw = draw.textlength(mid, font=f_bold(12))
-    draw.text(((W - mw) / 2, 97), mid, font=f_bold(12), fill=INK)
-    right = "WIRE REPORTS · 02:00 UTC"
-    rw = draw.textlength(right, font=f_sans(10.5))
-    draw.text((W - M - rw, 98), right, font=f_sans(10.5), fill=GREY)
-    draw.rectangle([M, 114, W - M, 116], fill=INK)
-
-    # ---------------- lead story ----------------
-    y = 126
-    lead = data["lead"]
-    text_w = 600
-    draw.text((M, y), tracked(lead["kicker"]), font=f_bold(12), fill=RED)
-    y += 21
-    for ln in wrap(draw, lead["headline"], f_serif(30), text_w):
-        draw.text((M, y), ln, font=f_serif(30), fill=INK)
-        y += 35
-    y += 3
-    for ln in wrap(draw, lead["deck"], f_sans(12.5), text_w):
-        draw.text((M, y), ln, font=f_sans(12.5), fill=BODY)
-        y += 15.5
-    draw.text((M, y + 2), lead["source"].upper(), font=f_bold(9.5), fill=GREY)
-    rendered.append(lead["headline"])
-    lead_bottom = y + 17
-
-    # illustration panel, right of the lead
-    px0, py0, px1 = 668, 126, W - M
-    draw.rectangle([px0, py0, px1, py0 + 23], fill=NAVY)
-    draw.text((px0 + 9, py0 + 5), "ANTALYA · NO DEAL", font=f_bold(11.5), fill=(255, 255, 255))
-    draw_globe(draw, (px0 + px1) // 2, py0 + 82, 52)
-    cap_y = py0 + 148
-    for ln in wrap(draw, "The longest climate summit on record ends with nothing signed.",
-                   f_ital(11), px1 - px0)[:2]:
-        draw.text((px0, cap_y), ln, font=f_ital(11), fill=BODY)
-        cap_y += 14
-    dots(draw, px0, cap_y + 2, px1, cap_y + 30, NAVY_LT)
-    panel_bottom = cap_y + 34
-
-    # dateline rail under the panel, two columns of four
-    rail_y = max(lead_bottom, panel_bottom) + 6
-    draw.rectangle([M, rail_y, W - M, rail_y + 2], fill=INK)
-    rail_y += 8
-    rail = [("ANTALYA", "Climate talks collapse"),
-            ("KYIV", "14 missing in drone strike"),
-            ("JAKARTA", "Factory fire, 50 missing"),
-            ("SEOUL", "Minister quits over AI cheating"),
-            ("WELLINGTON", "India 720 for 9, a record"),
-            ("NEW DELHI", "Nepal PM meets Modi"),
-            ("LISBON", "Thousands march on prices"),
-            ("GENEVA", "UN keeps talking on lethal AI")]
-    ry = rail_y
-    for row in range(4):
-        for col in range(2):
-            city, note = rail[row * 2 + col]
-            bx = M + col * (CW // 2)
-            draw.ellipse([bx + 2, ry + 4, bx + 9, ry + 11], fill=RED)
-            draw.text((bx + 16, ry), city, font=f_bold(11.5), fill=INK)
-            cw = draw.textlength(city, font=f_bold(11.5))
-            draw.text((bx + 21 + cw, ry + 1), "— " + note, font=f_sans(10.5), fill=BODY)
-        ry += 18.5
-    rail_bottom = ry
-
-    # ---------------- second story ----------------
-    y2 = rail_bottom + 10
-    draw.rectangle([M, y2 - 8, W - M, y2 - 6], fill=INK)
-    s2 = data["second"]
-    draw.text((M, y2), tracked(s2["kicker"]), font=f_bold(11.5), fill=RED)
-    yy = y2 + 19
-    for ln in wrap(draw, s2["headline"], f_serif(24), CW):
-        draw.text((M, yy), ln, font=f_serif(24), fill=INK)
-        yy += 30
-    for ln in wrap(draw, s2["deck"], f_sans(12.5), CW)[:2]:
-        draw.text((M, yy), ln, font=f_sans(12.5), fill=BODY)
-        yy += 15.5
-    draw.text((M, yy + 1), s2["source"].upper(), font=f_bold(9), fill=GREY)
-    rendered.append(s2["headline"])
-    yy += 10
-
-    # ---------------- numbers ticker ----------------
-    ny = yy + 6
-    draw.rectangle([M, ny, W - M, ny + 2], fill=INK)
-    nums = "  ·  ".join("%s %s" % (a, b) for a, b in data["numbers"])
-    ticker = "THE DAY IN NUMBERS — " + nums
-    ty = ny + 7
-    for ln in wrap(draw, ticker, f_bold(11), CW)[:2]:
-        draw.text((M, ty), ln, font=f_bold(11), fill=NAVY)
-        ty += 14
-    draw.rectangle([M, ty + 2, W - M, ty + 4], fill=INK)
-
-    # ---------------- sections grid, 3 x 2 ----------------
-    gy = ty + 16
-    col_w = (CW - 28) // 3
-    xs = [M, M + col_w + 14, M + 2 * (col_w + 14)]
-    rows = [["WORLD", "US & POLITICS", "BUSINESS & TECH"],
-            ["ASIA & DIPLOMACY", "SPORT", "CULTURE & ODDS"]]
-    secs = {s["name"]: s for s in data["sections"]}
-    for r, row in enumerate(rows):
-        ends = []
-        for i, name in enumerate(row):
-            ends.append(section_block(draw, xs[i], gy, col_w, secs[name]))
-            rendered.extend(st["h"] for st in secs[name]["stories"][:3])
-        gy = max(ends) + (8 if r == 0 else 6)
-        if r == 0:
-            draw.rectangle([M, gy - 8, W - M, gy - 7], fill=RULE)
-
-    # ---------------- in-brief strip ----------------
-    by = gy + 2
-    draw.text((M, by), tracked("AROUND THE WORLD IN BRIEF"), font=f_bold(11), fill=RED)
-    by += 16
-    briefs = data["briefs"][:8]
-    bw = (CW - 3 * 12) // 4
-    for i, (tag, text) in enumerate(briefs):
-        bx = M + (i % 4) * (bw + 12)
-        byy = by + (i // 4) * 26
-        draw.text((bx, byy), tag, font=f_bold(10), fill=NAVY)
-        tw2 = draw.textlength(tag, font=f_bold(10))
-        for j, ln in enumerate(wrap(draw, text, f_sans(10), bw - tw2 - 6)):
-            draw.text((bx + tw2 + 5, byy + j * 12.5), ln, font=f_sans(10), fill=BODY)
-        rendered.append("%s: %s" % (tag, text))
-    bottom = by + 2 * 26
-
-    # ---------------- footer ----------------
-    fy = max(bottom + 8, 962)
-    draw.rectangle([M, fy, W - M, fy + 2], fill=INK)
-    for j, ln in enumerate(wrap(draw, "SOURCES: " + data["sources"], f_sans(9.5), CW)[:2]):
-        draw.text((M, fy + 7 + j * 12), ln, font=f_sans(9.5), fill=GREY)
-    foot2 = ("One image, drawn by an AI agent from the day's wire reports · "
-             "Monday 23 November 2026 · Headlines as reported by the outlets named")
-    draw.text((M, fy + 33), foot2, font=f_ital(9.5), fill=GREY)
-
-    img = grain(img)
-    out = os.path.join(HERE, "entry.png")
-    img.save(out, optimize=True)
+    picture = paper_grain(page.img)
+    out = os.path.join(ROOT, "entry.png")
+    picture.save(out, optimize=True)
     digest = hashlib.sha256(open(out, "rb").read()).hexdigest()
-    manifest = {
-        "file": "entry.png",
-        "width": W,
-        "height": H,
-        "bytes": os.path.getsize(out),
-        "sha256": digest,
-        "date": "2026-11-23",
-        "items_rendered": len(rendered),
-        "headlines": rendered,
-    }
-    with open(os.path.join(HERE, "image_manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=1, ensure_ascii=False)
-    print("wrote", out, manifest["bytes"], "bytes; items:", len(rendered),
-          "; briefs bottom:", bottom, "; footer:", fy)
+    print("wrote", out, os.path.getsize(out), "bytes; items:", len(page.shown),
+          "; briefs bottom:", after_briefs, "; footer:", foot)
+    return {"bytes": os.path.getsize(out), "sha256": digest,
+            "items": len(page.shown), "headlines": page.shown}
 
 
 if __name__ == "__main__":
-    main()
+    build()
